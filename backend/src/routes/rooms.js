@@ -286,6 +286,115 @@ router.get('/:roomId', async (req, res) => {
  *       404:
  *         description: Room introuvable
  */
+/**
+ * @swagger
+ * /api/rooms/{roomId}/role:
+ *   put:
+ *     summary: Mettre à jour le rôle d'un membre dans une room
+ *     tags: [Rooms]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: roomId
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - role
+ *             properties:
+ *               role:
+ *                 type: string
+ *                 maxLength: 100
+ *                 example: Développeur Frontend
+ *     responses:
+ *       200:
+ *         description: Rôle mis à jour avec succès
+ *       400:
+ *         description: Erreur de validation
+ *       403:
+ *         description: Vous n'êtes pas membre de cette room
+ *       404:
+ *         description: Room introuvable
+ */
+router.put('/:roomId/role', async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const { role } = req.body;
+
+    // Valider le format UUID
+    if (!z.string().uuid().safeParse(roomId).success) {
+      return res.status(400).json({ error: 'ID de room invalide' });
+    }
+
+    // Valider le rôle
+    if (!role || typeof role !== 'string' || role.trim().length === 0) {
+      return res.status(400).json({ error: 'Le role est requis' });
+    }
+
+    if (role.length > 100) {
+      return res.status(400).json({ error: 'Le role ne peut pas depasser 100 caracteres' });
+    }
+
+    // Vérifier que l'utilisateur est membre de la room
+    const memberCheck = await pool.query(
+      'SELECT * FROM room_members WHERE user_id = $1 AND room_id = $2',
+      [req.user.id, roomId]
+    );
+
+    if (memberCheck.rows.length === 0) {
+      return res.status(403).json({ error: 'Vous n\'etes pas membre de cette room' });
+    }
+
+    // Vérifier que la room existe
+    const roomCheck = await pool.query('SELECT id FROM rooms WHERE id = $1', [roomId]);
+    if (roomCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Room introuvable' });
+    }
+
+    // Mettre à jour le rôle
+    await pool.query(
+      'UPDATE room_members SET role = $1 WHERE user_id = $2 AND room_id = $3',
+      [role.trim(), req.user.id, roomId]
+    );
+
+    res.json({ message: 'Role mis a jour avec succes', role: role.trim() });
+  } catch (error) {
+    console.error('Erreur lors de la mise a jour du role:', error);
+    res.status(500).json({ error: 'Erreur lors de la mise a jour du role' });
+  }
+});
+
+/**
+ * @swagger
+ * /api/rooms/{roomId}:
+ *   delete:
+ *     summary: Supprimer une room (seul le créateur peut)
+ *     tags: [Rooms]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: roomId
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     responses:
+ *       200:
+ *         description: Room supprimée avec succès
+ *       403:
+ *         description: Seul le créateur peut supprimer la room
+ *       404:
+ *         description: Room introuvable
+ */
 router.delete('/:roomId', async (req, res) => {
   try {
     const { roomId } = req.params;
