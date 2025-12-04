@@ -1,6 +1,6 @@
 import { io, Socket } from 'socket.io-client';
 
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:3001';
+const SOCKET_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
 let socket: Socket | null = null;
 
@@ -26,7 +26,7 @@ export function getSocket(): Socket {
 
     socket.on('disconnect', (reason) => {
       console.log('Socket.io déconnecté:', reason);
-      if (reason === 'io server disconnect') {
+      if (reason === 'io server disconnect' && socket) {
         // Le serveur a déconnecté le socket, il faut se reconnecter manuellement
         socket.connect();
       }

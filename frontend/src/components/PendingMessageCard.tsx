@@ -39,7 +39,7 @@ interface PendingMessageCardProps {
 export function PendingMessageCard({
   message,
   currentUserId,
-  members,
+  members: _members,
   validations,
   validationsCount,
   totalMembers,

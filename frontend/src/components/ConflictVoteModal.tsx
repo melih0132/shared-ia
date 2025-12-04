@@ -14,7 +14,7 @@ import { Socket } from 'socket.io-client';
 
 interface ConflictMessage {
   id: string;
-  user_id: string;
+  user_id: string | null;
   username?: string;
   role?: string;
   content: string;

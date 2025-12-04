@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useAuthStore } from '@/store/authStore';
-import { getSocket, reconnectSocket } from '@/lib/socket';
+import { getSocket } from '@/lib/socket';
 import { api } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -30,6 +30,7 @@ import {
 import { ArrowLeft, MoreVertical, Edit, Trash2, UserPlus, Loader2 } from 'lucide-react';
 import { Socket } from 'socket.io-client';
 import { useToast } from '@/hooks/use-toast';
+import ReactMarkdown from 'react-markdown';
 
 interface Message {
   id: string;
@@ -65,7 +66,7 @@ interface Member {
 
 interface Conflict {
   id: string;
-  messages: Message[];
+  messages: Array<Omit<Message, 'user_id'> & { user_id: string }>;
   votesCount: number;
   totalMembers: number;
 }
@@ -93,7 +94,7 @@ export default function RoomPage() {
   const [deleteRoomDialogOpen, setDeleteRoomDialogOpen] = useState(false);
   const [isDeletingRoom, setIsDeletingRoom] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Fonction pour trier les messages par created_at
   const sortMessages = useCallback((msgs: Message[]): Message[] => {
@@ -268,9 +269,6 @@ export default function RoomPage() {
         // Retirer le message en attente s'il existe encore
         const filtered = prev.filter((msg) => !(msg.id === data.messageId && msg.status === 'pending_validation'));
         
-        // S'assurer que le message validé existe dans la liste (au cas où message-validated n'a pas encore été reçu)
-        const hasValidatedMessage = filtered.some((msg) => msg.id === data.messageId && msg.status === 'validated');
-        
         // Trouver l'auteur du message validé pour nettoyer son indicateur de frappe
         const validatedMessage = prev.find((msg) => msg.id === data.messageId);
         if (validatedMessage?.user_id) {
@@ -282,20 +280,17 @@ export default function RoomPage() {
         }
         
         // Ajouter le message streaming (il sera trié par created_at)
-        const withStreaming = [
-          ...filtered,
-          {
-            id: 'streaming',
-            room_id: roomId!,
-            user_id: null,
-            type: 'ai',
-            status: 'sent',
-            content: '',
-            created_at: new Date().toISOString(),
-          },
-        ];
+        const streamingMessage: Message = {
+          id: 'streaming',
+          room_id: roomId!,
+          user_id: null,
+          type: 'ai',
+          status: 'sent',
+          content: '',
+          created_at: new Date().toISOString(),
+        };
         
-        return sortMessages(withStreaming);
+        return sortMessages([...filtered, streamingMessage]);
       });
       
       // Nettoyer tous les indicateurs de frappe quand l'IA commence à répondre
@@ -346,7 +341,10 @@ export default function RoomPage() {
       const totalMembers = members.length;
       setConflict({
         id: data.conflictId,
-        messages: data.messages,
+        messages: data.messages.map(msg => ({
+          ...msg,
+          user_id: msg.user_id || '',
+        })),
         votesCount: 0,
         totalMembers,
       });
@@ -463,7 +461,7 @@ export default function RoomPage() {
       });
     });
 
-    socketInstance.on('room-not-found', (data: { roomId: string }) => {
+    socketInstance.on('room-not-found', () => {
       toast({
         title: 'Room introuvable',
         description: 'Cette conversation n\'existe plus ou a été supprimée',
@@ -472,7 +470,7 @@ export default function RoomPage() {
       navigate('/dashboard');
     });
 
-    socketInstance.on('room-deleted', (data: { roomId: string }) => {
+    socketInstance.on('room-deleted', () => {
       toast({
         title: 'Conversation supprimée',
         description: 'Cette conversation a été supprimée',
@@ -727,7 +725,10 @@ export default function RoomPage() {
                   return (
                     <PendingMessageCard
                       key={message.id}
-                      message={message}
+                      message={{
+                        ...message,
+                        user_id: message.user_id || '',
+                      }}
                       currentUserId={user?.id || ''}
                       members={members}
                       validations={validations}
@@ -789,7 +790,47 @@ export default function RoomPage() {
                             </DropdownMenu>
                           )}
                       </div>
-                      <div className="text-sm whitespace-pre-wrap">{message.content}</div>
+                      {message.type === 'ai' ? (
+                        <div className="text-sm prose prose-sm max-w-none dark:prose-invert prose-headings:mt-4 prose-headings:mb-2 prose-p:my-2 prose-ul:my-2 prose-ol:my-2">
+                          <ReactMarkdown
+                            components={{
+                              p: ({ children }) => <p className="mb-2 last:mb-0 leading-relaxed">{children}</p>,
+                              ul: ({ children }) => <ul className="mb-2 ml-4 list-disc space-y-1">{children}</ul>,
+                              ol: ({ children }) => <ol className="mb-2 ml-4 list-decimal space-y-1">{children}</ol>,
+                              li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+                              strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+                              em: ({ children }) => <em className="italic">{children}</em>,
+                              code: ({ children, className }) => {
+                                const isInline = !className;
+                                return isInline ? (
+                                  <code className="bg-blue-100 dark:bg-blue-900 px-1.5 py-0.5 rounded text-xs font-mono text-blue-800 dark:text-blue-200">
+                                    {children}
+                                  </code>
+                                ) : (
+                                  <code className={className}>{children}</code>
+                                );
+                              },
+                              pre: ({ children }) => (
+                                <pre className="bg-gray-100 dark:bg-gray-800 p-3 rounded-lg overflow-x-auto mb-2 text-xs">
+                                  {children}
+                                </pre>
+                              ),
+                              h1: ({ children }) => <h1 className="text-xl font-bold mb-2 mt-4 first:mt-0">{children}</h1>,
+                              h2: ({ children }) => <h2 className="text-lg font-bold mb-2 mt-4 first:mt-0">{children}</h2>,
+                              h3: ({ children }) => <h3 className="text-base font-bold mb-2 mt-3 first:mt-0">{children}</h3>,
+                              blockquote: ({ children }) => (
+                                <blockquote className="border-l-4 border-blue-300 dark:border-blue-600 pl-4 italic my-2 text-gray-700 dark:text-gray-300">
+                                  {children}
+                                </blockquote>
+                              ),
+                            }}
+                          >
+                            {message.content}
+                          </ReactMarkdown>
+                        </div>
+                      ) : (
+                        <div className="text-sm whitespace-pre-wrap">{message.content}</div>
+                      )}
                       {message.status === 'rejected' && (
                         <Badge variant="destructive" className="mt-2 text-xs">
                           Rejeté
