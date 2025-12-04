@@ -82,7 +82,6 @@ export default function RoomPage() {
   const [room, setRoom] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [messageInput, setMessageInput] = useState('');
-  const [isTyping, setIsTyping] = useState(false);
   const [typingMembers, setTypingMembers] = useState<Set<string>>(new Set());
   const [pendingMessage, setPendingMessage] = useState<Message | null>(null);
   const [conflict, setConflict] = useState<Conflict | null>(null);
@@ -517,7 +516,6 @@ export default function RoomPage() {
     });
 
     setMessageInput('');
-    setIsTyping(false);
     // Arrêter l'indicateur de frappe
     socket.emit('typing', { roomId, isTyping: false });
     if (typingTimeoutRef.current) {
@@ -527,7 +525,6 @@ export default function RoomPage() {
 
   const handleTyping = (typing: boolean) => {
     if (!socket || !roomId) return;
-    setIsTyping(typing);
     socket.emit('typing', { roomId, isTyping: typing });
 
     if (typingTimeoutRef.current) {
@@ -536,7 +533,6 @@ export default function RoomPage() {
 
     if (typing) {
       typingTimeoutRef.current = setTimeout(() => {
-        setIsTyping(false);
         socket.emit('typing', { roomId, isTyping: false });
       }, 3000);
     }
