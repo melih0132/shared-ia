@@ -1,5 +1,22 @@
 import swaggerJsdoc from 'swagger-jsdoc';
 
+// Déterminer l'URL de l'API pour Swagger
+const getApiUrl = () => {
+  // Render fournit RENDER_EXTERNAL_URL en production
+  if (process.env.RENDER_EXTERNAL_URL) {
+    return process.env.RENDER_EXTERNAL_URL;
+  }
+  // Sinon, utiliser API_URL si définie
+  if (process.env.API_URL) {
+    return process.env.API_URL;
+  }
+  // En développement, utiliser localhost
+  return 'http://localhost:3001';
+};
+
+const apiUrl = getApiUrl();
+const isProduction = process.env.NODE_ENV === 'production';
+
 const options = {
   definition: {
     openapi: '3.0.0',
@@ -13,8 +30,8 @@ const options = {
     },
     servers: [
       {
-        url: process.env.API_URL || 'http://localhost:3001',
-        description: 'Serveur de développement',
+        url: apiUrl,
+        description: isProduction ? 'Serveur de production' : 'Serveur de développement',
       },
     ],
     components: {
