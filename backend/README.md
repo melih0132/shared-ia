@@ -95,14 +95,39 @@ backend/
 ## Socket.io Events
 
 ### Client → Serveur
-- `join-room` - Rejoindre une room
-- `leave-room` - Quitter une room
-- `send-message` - Envoyer un message (à implémenter)
+- `join-room` - Rejoindre une room (roomId)
+- `leave-room` - Quitter une room (roomId)
+- `send-message` - Envoyer un message (roomId, content)
+- `validate-message` - Valider un message (messageId, action, addition?, comment?)
+- `retract-message` - Retirer un message (messageId)
+- `edit-message` - Éditer un message (messageId, newContent)
+- `delete-message` - Supprimer un message (messageId)
+- `vote-message` - Voter pour un message en conflit (conflictId, messageId)
+- `typing` - Indicateur d'écriture (roomId, isTyping)
+- `retry-ai-message` - Retry manuel d'un message en erreur (messageId, roomId)
+- `sync-state` - Synchroniser l'état après reconnexion (roomIds[])
 
 ### Serveur → Client
-- `authenticated` - Confirmation d'authentification
-- `room-joined` - Confirmation de jointure à une room
-- `error` - Erreur
+- `authenticated` - Confirmation d'authentification (userId, username, reconnect)
+- `room-joined` - Confirmation de jointure à une room (room, members, messages)
+- `new-pending-message` - Nouveau message en attente de validation
+- `validation-update` - Mise à jour d'une validation
+- `message-rejected` - Message rejeté
+- `message-retracted` - Message retiré
+- `message-edited` - Message édité
+- `messages-deleted` - Messages supprimés
+- `conflict-detected` - Conflit détecté
+- `vote-update` - Mise à jour des votes
+- `conflict-resolved` - Conflit résolu
+- `ai-response-start` - Début de la réponse IA
+- `ai-response-chunk` - Chunk de la réponse IA
+- `ai-response-end` - Fin de la réponse IA
+- `ai-response-error` - Erreur lors de la génération IA
+- `ai-response-retry` - Notification d'un retry automatique
+- `typing-update` - Mise à jour de l'indicateur d'écriture
+- `user-presence` - Présence d'un utilisateur (online/offline)
+- `state-synced` - État synchronisé après reconnexion
+- `error` - Erreur générée
 
 ## Base de données
 

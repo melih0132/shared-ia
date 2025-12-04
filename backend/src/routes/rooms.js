@@ -85,11 +85,12 @@ router.post('/', async (req, res) => {
       );
 
       // Créer un message de bienvenue de l'IA
+      const welcomeMessageContent = 'Bonjour ! Je suis votre assistant IA. Pour commencer, veuillez définir votre rôle dans l\'équipe.';
       const welcomeMessage = await client.query(
         `INSERT INTO messages (room_id, user_id, type, content, status, created_at)
-         VALUES ($1, NULL, 'ai', 'Bonjour ! Je suis votre assistant IA. Pour commencer, veuillez définir votre rôle dans l\'équipe.', 'sent', NOW())
+         VALUES ($1, NULL, 'ai', $2, 'sent', NOW())
          RETURNING *`,
-        [room.id]
+        [room.id, welcomeMessageContent]
       );
 
       await client.query('COMMIT');
@@ -413,6 +414,14 @@ router.delete('/:roomId', async (req, res) => {
 
     if (roomResult.rows[0].creator_id !== req.user.id) {
       return res.status(403).json({ error: 'Seul le créateur peut supprimer la room' });
+    }
+
+    // Notifier tous les membres de la room via Socket.io que la room a été supprimée
+    // Note: Cette notification doit être faite avant la suppression pour que les sockets soient encore connectés
+    const { getIOInstance } = await import('../config/socket.js');
+    const io = getIOInstance();
+    if (io) {
+      io.to(`room:${roomId}`).emit('room-deleted', { roomId });
     }
 
     // Supprimer la room (les contraintes CASCADE supprimeront les données liées)

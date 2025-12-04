@@ -37,10 +37,31 @@ export function setupSocketIO(io) {
 
   io.on('connection', (socket) => {
     console.log(`Utilisateur connecte: ${socket.username} (${socket.userId})`);
+    
+    // Si l'utilisateur était déjà connecté, remplacer l'ancienne connexion
+    const oldSocketId = connectedUsers.get(socket.userId);
+    if (oldSocketId && oldSocketId !== socket.id) {
+      const oldSocket = io.sockets.sockets.get(oldSocketId);
+      if (oldSocket) {
+        oldSocket.disconnect();
+      }
+    }
+    
     connectedUsers.set(socket.userId, socket.id);
 
-    // Émettre la connexion réussie
-    socket.emit('authenticated', { userId: socket.userId, username: socket.username });
+    // Notifier la présence en ligne
+    socket.broadcast.emit('user-presence', {
+      userId: socket.userId,
+      username: socket.username,
+      status: 'online',
+    });
+
+    // Émettre la connexion réussie avec synchronisation d'état
+    socket.emit('authenticated', { 
+      userId: socket.userId, 
+      username: socket.username,
+      reconnect: !!oldSocketId, // Indique si c'est une reconnexion
+    });
 
     // Gestion des rooms
     socket.on('join-room', async (roomId) => {
@@ -58,6 +79,13 @@ export function setupSocketIO(io) {
 
         socket.join(`room:${roomId}`);
         console.log(`${socket.username} a rejoint la room ${roomId}`);
+
+        // Vérifier que la room existe
+        const roomCheck = await pool.query('SELECT id FROM rooms WHERE id = $1', [roomId]);
+        if (roomCheck.rows.length === 0) {
+          socket.emit('room-not-found', { roomId });
+          return;
+        }
 
         // Récupérer les infos de la room
         const roomResult = await pool.query(
@@ -83,9 +111,15 @@ export function setupSocketIO(io) {
           [roomId]
         );
 
+        // Récupérer les membres avec leur statut de présence
+        const membersWithPresence = (roomResult.rows[0]?.members || []).map(member => ({
+          ...member,
+          isOnline: connectedUsers.has(member.id),
+        }));
+
         socket.emit('room-joined', {
           room: roomResult.rows[0],
-          members: roomResult.rows[0]?.members || [],
+          members: membersWithPresence,
           messages: messagesResult.rows,
         });
       } catch (error) {
@@ -134,14 +168,39 @@ export function setupSocketIO(io) {
           return;
         }
 
+        // Récupérer tous les autres membres de la room (sauf l'auteur)
+        const otherMembersResult = await client.query(
+          'SELECT user_id FROM room_members WHERE room_id = $1 AND user_id != $2',
+          [roomId, socket.userId]
+        );
+        
+        // Compter combien d'autres membres sont actuellement connectés dans cette room Socket.io
+        const roomSockets = io.sockets.adapter.rooms.get(`room:${roomId}`);
+        const connectedOtherMemberIds = new Set();
+        
+        if (roomSockets) {
+          for (const socketId of roomSockets) {
+            const roomSocket = io.sockets.sockets.get(socketId);
+            if (roomSocket && roomSocket.userId && roomSocket.userId !== socket.userId) {
+              connectedOtherMemberIds.add(roomSocket.userId);
+            }
+          }
+        }
+        
+        const otherMembersCount = otherMembersResult.rows.filter(m => 
+          connectedOtherMemberIds.has(m.user_id)
+        ).length;
+
         // Vérifier s'il existe déjà un message en attente de validation (détection de conflit)
+        // Ne détecter un conflit que s'il y a d'autres membres dans la room
         const pendingCheck = await client.query(
           'SELECT id FROM messages WHERE room_id = $1 AND status = $2',
           [roomId, 'pending_validation']
         );
 
-        // Si un message est déjà en attente, créer un conflit
-        if (pendingCheck.rows.length > 0) {
+        // Si un message est déjà en attente ET qu'il y a d'autres membres, créer un conflit
+        // Si l'auteur est seul, on ne crée pas de conflit car il n'y a personne pour voter
+        if (pendingCheck.rows.length > 0 && otherMembersCount > 0) {
           // Créer le nouveau message en "pending_validation"
           const messageResult = await client.query(
             `INSERT INTO messages (room_id, user_id, type, content, status, created_at)
@@ -222,12 +281,15 @@ export function setupSocketIO(io) {
           return;
         }
 
-        // Créer le message en base avec status "pending_validation"
+        // Si l'auteur est seul dans la room, valider automatiquement le message
+        const shouldAutoValidate = otherMembersCount === 0;
+
+        // Créer le message en base avec status "pending_validation" ou "validated" selon le cas
         const messageResult = await client.query(
           `INSERT INTO messages (room_id, user_id, type, content, status, created_at)
-           VALUES ($1, $2, 'user', $3, 'pending_validation', NOW())
+           VALUES ($1, $2, 'user', $3, $4, NOW())
            RETURNING *`,
-          [roomId, socket.userId, content.trim()]
+          [roomId, socket.userId, content.trim(), shouldAutoValidate ? 'validated' : 'pending_validation']
         );
 
         const message = messageResult.rows[0];
@@ -244,10 +306,35 @@ export function setupSocketIO(io) {
           role: role,
         };
 
-        // Broadcast le message en attente à tous les membres de la room
-        io.to(`room:${roomId}`).emit('new-pending-message', messageToBroadcast);
-
-        console.log(`Message en attente de validation envoye par ${socket.username} dans room ${roomId}`);
+        if (shouldAutoValidate) {
+          // Si validation automatique, émettre d'abord le message validé pour qu'il s'affiche
+          const validatedMessageResult = await pool.query(
+            `SELECT m.*, u.username, rm.role
+             FROM messages m
+             INNER JOIN users u ON m.user_id = u.id
+             INNER JOIN room_members rm ON m.user_id = rm.user_id AND m.room_id = rm.room_id
+             WHERE m.id = $1`,
+            [message.id]
+          );
+          
+          // Émettre l'événement que le message est validé (pour l'ajouter à la liste)
+          io.to(`room:${roomId}`).emit('message-validated', {
+            message: validatedMessageResult.rows[0],
+          });
+          
+          // Ensuite, envoyer directement à l'IA (avec un petit délai pour s'assurer que le message est affiché)
+          setTimeout(() => {
+            sendMessageToAI(io, roomId, message.id).catch((error) => {
+              console.error('Erreur lors de l\'envoi automatique à l\'IA:', error);
+            });
+          }, 100);
+          
+          console.log(`Message automatiquement validé et envoyé à l'IA (auteur seul) par ${socket.username} dans room ${roomId}`);
+        } else {
+          // Broadcast le message en attente à tous les membres de la room
+          io.to(`room:${roomId}`).emit('new-pending-message', messageToBroadcast);
+          console.log(`Message en attente de validation envoye par ${socket.username} dans room ${roomId}`);
+        }
       } catch (error) {
         await client.query('ROLLBACK');
         console.error('Erreur lors de l\'envoi du message:', error);
@@ -448,13 +535,29 @@ export function setupSocketIO(io) {
 
         const validationsCount = parseInt(validationsResult.rows[0].count);
 
-        // Compter les membres actifs de la room (sauf l'auteur du message)
+        // Récupérer tous les autres membres de la room (sauf l'auteur du message)
         const membersResult = await client.query(
-          'SELECT COUNT(*) as count FROM room_members WHERE room_id = $1 AND user_id != $2',
+          'SELECT user_id FROM room_members WHERE room_id = $1 AND user_id != $2',
           [message.room_id, message.user_id]
         );
 
-        const totalMembers = parseInt(membersResult.rows[0].count);
+        // Compter uniquement les membres actuellement connectés dans la room Socket.io
+        const roomSockets = io.sockets.adapter.rooms.get(`room:${message.room_id}`);
+        const connectedMemberIds = new Set();
+        
+        if (roomSockets) {
+          for (const socketId of roomSockets) {
+            const socket = io.sockets.sockets.get(socketId);
+            if (socket && socket.userId) {
+              connectedMemberIds.add(socket.userId);
+            }
+          }
+        }
+        
+        // Compter combien d'autres membres (sauf l'auteur) sont connectés
+        const totalMembers = membersResult.rows.filter(m => 
+          connectedMemberIds.has(m.user_id)
+        ).length;
 
         // Récupérer toutes les validations pour le broadcast
         const allValidationsResult = await client.query(
@@ -466,6 +569,14 @@ export function setupSocketIO(io) {
            ORDER BY mv.created_at ASC`,
           [messageId]
         );
+
+        // Si toutes les validations sont présentes, mettre à jour le status à "validated"
+        if (validationsCount >= totalMembers) {
+          await client.query(
+            'UPDATE messages SET status = $1 WHERE id = $2',
+            ['validated', messageId]
+          );
+        }
 
         await client.query('COMMIT');
 
@@ -486,6 +597,21 @@ export function setupSocketIO(io) {
 
         // Si toutes les validations sont présentes, déclencher l'envoi à l'IA
         if (validationsCount >= totalMembers) {
+          // Récupérer le message validé avec username et role
+          const validatedMessageResult = await pool.query(
+            `SELECT m.*, u.username, rm.role
+             FROM messages m
+             INNER JOIN users u ON m.user_id = u.id
+             INNER JOIN room_members rm ON m.user_id = rm.user_id AND m.room_id = rm.room_id
+             WHERE m.id = $1`,
+            [messageId]
+          );
+          
+          // Émettre l'événement que le message est validé
+          io.to(`room:${message.room_id}`).emit('message-validated', {
+            message: validatedMessageResult.rows[0],
+          });
+          
           // Appeler la fonction d'envoi à l'IA
           sendMessageToAI(io, message.room_id, messageId).catch((error) => {
             console.error('Erreur lors de l\'envoi à l\'IA:', error);
@@ -949,9 +1075,110 @@ export function setupSocketIO(io) {
       }
     });
 
+    // Synchronisation d'état après reconnexion - Phase 8
+    socket.on('sync-state', async (data) => {
+      try {
+        const { roomIds } = data || {};
+
+        if (!roomIds || !Array.isArray(roomIds)) {
+          return;
+        }
+
+        // Pour chaque room, récupérer l'état actuel
+        const state = {
+          rooms: [],
+          pendingInvitations: [],
+        };
+
+        for (const roomId of roomIds) {
+          // Vérifier que l'utilisateur est membre
+          const memberCheck = await pool.query(
+            'SELECT * FROM room_members WHERE user_id = $1 AND room_id = $2',
+            [socket.userId, roomId]
+          );
+
+          if (memberCheck.rows.length === 0) {
+            continue;
+          }
+
+          // Récupérer les messages en attente de validation
+          const pendingMessages = await pool.query(
+            `SELECT m.*, u.username, rm.role
+             FROM messages m
+             LEFT JOIN users u ON m.user_id = u.id
+             LEFT JOIN room_members rm ON m.user_id = rm.user_id AND m.room_id = rm.room_id
+             WHERE m.room_id = $1 AND m.status = 'pending_validation'
+             ORDER BY m.created_at DESC
+             LIMIT 1`,
+            [roomId]
+          );
+
+          // Récupérer les conflits actifs
+          const activeConflicts = await pool.query(
+            `SELECT mc.*, 
+               json_agg(json_build_object('id', m.id, 'username', u.username, 'role', rm.role, 'content', m.content)) as messages
+             FROM message_conflicts mc
+             INNER JOIN conflict_messages cm ON mc.id = cm.conflict_id
+             INNER JOIN messages m ON cm.message_id = m.id
+             LEFT JOIN users u ON m.user_id = u.id
+             LEFT JOIN room_members rm ON m.user_id = rm.user_id AND m.room_id = rm.room_id
+             WHERE mc.room_id = $1 AND mc.status = 'voting'
+             GROUP BY mc.id`,
+            [roomId]
+          );
+
+          // Récupérer les validations en cours
+          const validations = await pool.query(
+            `SELECT mv.*, m.id as message_id, m.room_id
+             FROM message_validations mv
+             INNER JOIN messages m ON mv.message_id = m.id
+             WHERE m.room_id = $1 AND m.status = 'pending_validation'`,
+            [roomId]
+          );
+
+          state.rooms.push({
+            roomId,
+            pendingMessage: pendingMessages.rows[0] || null,
+            activeConflict: activeConflicts.rows[0] || null,
+            validations: validations.rows,
+          });
+        }
+
+        // Récupérer les invitations en attente
+        const invitations = await pool.query(
+          `SELECT i.*, r.name as room_name, u.username as sender_username
+           FROM invitations i
+           INNER JOIN rooms r ON i.room_id = r.id
+           INNER JOIN users u ON i.sender_id = u.id
+           WHERE i.recipient_id = $1 AND i.status = 'pending' AND i.expires_at > NOW()`,
+          [socket.userId]
+        );
+
+        state.pendingInvitations = invitations.rows;
+
+        socket.emit('state-synced', state);
+      } catch (error) {
+        console.error('Erreur lors de la synchronisation d\'etat:', error);
+        socket.emit('error', { message: 'Erreur lors de la synchronisation' });
+      }
+    });
+
     socket.on('disconnect', () => {
       console.log(`Utilisateur deconnecte: ${socket.username} (${socket.userId})`);
-      connectedUsers.delete(socket.userId);
+      
+      // Vérifier si l'utilisateur a une autre connexion active
+      const currentSocketId = connectedUsers.get(socket.userId);
+      if (currentSocketId === socket.id) {
+        // C'est la dernière connexion, marquer comme offline
+        connectedUsers.delete(socket.userId);
+        
+        // Notifier la présence hors ligne
+        socket.broadcast.emit('user-presence', {
+          userId: socket.userId,
+          username: socket.username,
+          status: 'offline',
+        });
+      }
       
       // Nettoyer les indicateurs de typing
       for (const [roomId, userIds] of typingUsers.entries()) {
@@ -973,6 +1200,11 @@ export function setupSocketIO(io) {
   });
 
   return io;
+}
+
+// Helper pour obtenir l'instance io
+export function getIOInstance() {
+  return ioInstance;
 }
 
 // Helper pour obtenir le socket d'un utilisateur

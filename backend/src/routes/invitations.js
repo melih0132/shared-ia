@@ -282,11 +282,12 @@ router.post('/:id/accept', async (req, res) => {
       );
 
       // Créer un message IA demandant le rôle
+      const welcomeMessageContent = `Bonjour ${req.user.username} ! Veuillez définir votre rôle dans l'équipe.`;
       const welcomeMessage = await client.query(
         `INSERT INTO messages (room_id, user_id, type, content, status, created_at)
-         VALUES ($1, NULL, 'ai', 'Bonjour ${req.user.username} ! Veuillez définir votre rôle dans l\'équipe.', 'sent', NOW())
+         VALUES ($1, NULL, 'ai', $2, 'sent', NOW())
          RETURNING *`,
-        [invitation.room_id]
+        [invitation.room_id, welcomeMessageContent]
       );
 
       await client.query('COMMIT');
