@@ -1,63 +1,40 @@
-# Frontend - Application de Chat IA Collaboratif
+# Frontend
 
-Frontend React avec Vite pour l'application de chat IA collaboratif.
+React + Vite SPA for the collaborative AI chat.
 
-## Prérequis
+## Overview
 
-- Node.js 18+
-- Backend en cours d'exécution sur http://localhost:3001
+Auth screens, room UI, and realtime Socket.io client. Talks to the backend API for JWT sessions and validated AI replies.
 
-## Installation
+## Stack
 
-1. Installer les dépendances :
-```bash
-npm install
-```
+- React, TypeScript, Vite
+- Zustand, React Hook Form, Axios
+- Tailwind CSS, shadcn/ui (Radix)
 
-2. Créer un fichier `.env` à la racine du dossier `frontend` :
-```env
-VITE_API_URL=http://localhost:3001
-VITE_SOCKET_URL=http://localhost:3001
-```
-
-3. Lancer le serveur de développement :
-```bash
-npm run dev
-```
-
-L'application démarre sur `http://localhost:5173`
-
-## Structure du projet
+## Layout
 
 ```
 frontend/
+├── public/
 ├── src/
 │   ├── components/
-│   │   ├── ui/          # Composants UI de base (shadcn/ui)
-│   │   └── ...          # Composants métier
-│   ├── pages/           # Pages de l'application
-│   ├── lib/             # Utilitaires (API, Socket, etc.)
-│   ├── store/           # Stores Zustand
-│   └── App.tsx          # Point d'entrée
-├── .env                 # Variables d'environnement (à créer)
+│   ├── pages/
+│   ├── lib/
+│   ├── store/
+│   └── ...
+├── env.example
 └── package.json
 ```
 
-## Technologies utilisées
+## Run
 
-- **React 19** avec TypeScript
-- **Vite** - Build tool
-- **TailwindCSS** - Styling
-- **React Router v6** - Routing
-- **Zustand** - State management
-- **React Hook Form + Zod** - Formulaires et validation
-- **Socket.io-client** - Temps réel
-- **Axios** - Requêtes HTTP
+Requires the backend on `http://localhost:3001`.
 
-## Pages
+```bash
+cp env.example .env
+npm install
+npm run dev
+```
 
-- `/login` - Page de connexion
-- `/register` - Page d'inscription
-- `/dashboard` - Dashboard avec liste des rooms
-- `/rooms/:roomId` - Page de chat d'une room (à implémenter)
-- `/rooms/new` - Création d'une nouvelle room (à implémenter)
+App: `http://localhost:5173`. Env keys: `VITE_API_URL`, `VITE_SOCKET_URL`.
